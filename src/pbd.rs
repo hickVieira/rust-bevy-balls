@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
 use macroquad::prelude::*;
+
+use crate::AxisChain::*;
 
 struct Particle {
     pub id: usize,
@@ -85,60 +89,106 @@ impl World {
 
         // integrate
         for p in self.particles.iter_mut() {
-            // p.integrate(self.dt);
             p.integrate(0.1);
         }
 
         // wall collisions
         for p in self.particles.iter_mut() {
-            let distY = p.pos.y - p.radius;
-            if distY < 0.0 {
-                p.displace(Vec2::new(0.0, -distY), 1.0);
+            let dist_y = p.pos.y - p.radius;
+            if dist_y < 0.0 {
+                p.displace(Vec2::new(0.0, -dist_y), 1.0);
             }
 
-            let distX = p.pos.x - p.radius;
-            if distX < 0.0 {
-                p.displace(Vec2::new(-distX, 0.0), 1.0);
+            let dist_x = p.pos.x - p.radius;
+            if dist_x < 0.0 {
+                p.displace(Vec2::new(-dist_x, 0.0), 1.0);
             }
 
-            let distX = p.pos.x + p.radius;
-            if distX > screen_width() {
-                p.displace(Vec2::new(screen_width() - distX, 0.0), 1.0);
+            let dist_x = p.pos.x + p.radius;
+            if dist_x > screen_width() {
+                p.displace(Vec2::new(screen_width() - dist_x, 0.0), 1.0);
             }
         }
 
-        // sort by axis
-        // self.particles
-        //     .sort_by(|a, b| a.pos.x.partial_cmp(&b.pos.x).unwrap());
-        // self.particles
-        //     .sort_by(|a, b| a.pos.y.partial_cmp(&b.pos.y).unwrap());
+        // build sorted lists
+        let mut x_axis = AxisChain::new(10., self.particles.len());
+        let mut y_axis = AxisChain::new(10., self.particles.len());
 
-        // find axis intersections
-        // let mut intersections_x: Vec<(usize, usize)> = vec![];
-        // let mut intersections_y: Vec<(usize, usize)> = vec![];
+        for i in 0..self.particles.len() {
+            let p = &self.particles[i];
+            x_axis.set(i, p.pos.x);
+            y_axis.set(i, p.pos.y);
+        }
+
+        x_axis.build();
+        y_axis.build();
+
+        // find intersections
+        let mut intersections: Vec<(usize, usize)> = vec![];
+        for i in 0..self.particles.len() {
+            let x_index = x_axis.get(i).0;
+            let y_index = y_axis.get(i).0;
+
+            let x_chain = x_axis.find_chain(x_index);
+            let y_chain = y_axis.find_chain(y_index);
+
+            let mut set: HashSet<usize> = HashSet::new();
+            {
+                for v in x_chain.iter() {
+                    if !set.contains(v) {
+                        set.insert(*v);
+                    }
+                }
+                for v in y_chain.iter() {
+                    if !set.contains(v) {
+                        set.insert(*v);
+                    }
+                }
+            }
+
+            // intersection
+            for v in set.iter() {
+                if x_chain.binary_search(v).is_ok() && y_chain.binary_search(v).is_ok() {
+                    intersections.push((i, *v));
+                }
+            }
+        }
 
         // store displace values
         let mut displacements: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
 
         // particle collisions
-        for i in 0..self.particles.len() {
-            for j in 0..self.particles.len() {
-                if i == j {
-                    continue;
-                }
-
-                let p1 = &self.particles[i];
-                let p2 = &self.particles[j];
-                let delta = p1.pos - p2.pos;
-                let dist = delta.length();
-                let diff = p1.radius + p2.radius - dist;
-                if diff > 0.0 {
-                    let normal = delta / dist;
-                    displacements[i] += normal * diff * 0.5;
-                    displacements[j] -= normal * diff * 0.5;
-                }
+        for (i, j) in intersections.iter() {
+            let p1 = &self.particles[*i];
+            let p2 = &self.particles[*j];
+            let delta = p1.pos - p2.pos;
+            let dist = delta.length();
+            let diff = p1.radius + p2.radius - dist;
+            if diff > 0.0 {
+                let normal = delta / dist;
+                displacements[*i] += normal * diff * 0.5;
+                displacements[*j] -= normal * diff * 0.5;
             }
         }
+        
+        // for i in 0..self.particles.len() {
+        //     for j in 0..self.particles.len() {
+        //         if i == j {
+        //             continue;
+        //         }
+
+        //         let p1 = &self.particles[i];
+        //         let p2 = &self.particles[j];
+        //         let delta = p1.pos - p2.pos;
+        //         let dist = delta.length();
+        //         let diff = p1.radius + p2.radius - dist;
+        //         if diff > 0.0 {
+        //             let normal = delta / dist;
+        //             displacements[i] += normal * diff * 0.5;
+        //             displacements[j] -= normal * diff * 0.5;
+        //         }
+        //     }
+        // }
 
         // apply displacements
         for i in 0..self.particles.len() {

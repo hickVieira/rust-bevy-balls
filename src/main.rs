@@ -1,6 +1,7 @@
 use macroquad::miniquad::window;
 
 mod pbd;
+mod AxisChain;
 
 #[macroquad::main("pbd")]
 async fn main() {
