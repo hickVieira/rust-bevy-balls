@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 use macroquad::prelude::*;
 
 pub async fn main() {
@@ -156,7 +158,7 @@ impl World {
             let dist_x = p.pos.x - p.radius;
             if dist_x < 0.0 {
                 p.displace(Vec2::new(-dist_x, 0.0));
-                p.vel = Vec2::new(p.vel.x, p.vel.y);
+                p.vel = Vec2::new(-p.vel.x, p.vel.y);
             }
 
             let dist_x = p.pos.x + p.radius;
@@ -183,9 +185,13 @@ impl World {
                 let dist = delta.length() + f32::EPSILON;
                 let diff = p1.radius + p2.radius - dist;
 
-                if dist == 0.0 || dist > p1.radius + p2.radius {
+                if diff < 0.0 {
                     continue;
                 }
+
+                // if dist == 0.0 || dist > p1.radius + p2.radius {
+                //     continue;
+                // }
 
                 let normal = delta / dist;
 
@@ -221,14 +227,15 @@ impl World {
 
     async fn solve_input(&mut self) {
         if is_key_down(KeyCode::Space) {
+            let radius = rand::gen_range(10.0, 50.0);
             for _ in 0..10 {
                 self.particles.push(Particle::new(
                     Vec2::new(
                         rand::gen_range(0, screen_width() as u32) as f32,
                         rand::gen_range(0, screen_height() as u32) as f32,
                     ),
-                    1.0,
-                    RADIUS,
+                    PI * radius * radius,
+                    radius,
                     Vec2::new(rand::gen_range(-100.0, 100.0), rand::gen_range(-1.0, 1.0)),
                 ));
             }
