@@ -1,10 +1,11 @@
 use macroquad::miniquad::window;
 
 mod pbd;
-mod AxisChain;
+mod vel;
 
 #[macroquad::main("pbd")]
 async fn main() {
     window::set_fullscreen(true);
-    pbd::main().await;
+    // pbd::main().await;
+    vel::main().await;
 }

@@ -16,27 +16,24 @@ pub async fn main() {
 }
 
 const RADIUS: f32 = 10.0;
-const PHY_ITERATIONS: u32 = 4;
-const PHY_DT: f32 = 0.01;
+const PHY_ITERATIONS: u32 = 1;
+const PHY_DT: f32 = 0.1;
 const PHY_SDT: f32 = PHY_DT / PHY_ITERATIONS as f32;
 const GRAVITY: Vec2 = Vec2::new(0.0, -9.8);
+const ELASTICITY: f32 = 0.0;
 
 struct Particle {
-    pub id: usize,
     pub pos: Vec2,
-    pub post_last: Vec2,
-    pub accel: Vec2,
+    pub vel: Vec2,
     pub mass: f32,
     pub radius: f32,
 }
 
 impl Particle {
-    fn new(id: usize, pos: Vec2, mass: f32, radius: f32) -> Self {
+    fn new(pos: Vec2, mass: f32, radius: f32, vel: Vec2) -> Self {
         Self {
-            id,
             pos,
-            post_last: pos,
-            accel: Vec2::new(0.0, 0.0),
+            vel,
             mass,
             radius,
         }
@@ -54,22 +51,25 @@ impl Particle {
     }
 
     fn integrate(&mut self, dt: f32) {
-        let vel = self.pos - self.post_last;
-        self.post_last = self.pos;
-        self.pos = self.pos + vel + self.accel * dt * dt;
-        self.accel = Vec2::new(0.0, 0.0);
+        self.pos = self.pos + self.vel * dt;
     }
 
     fn displace(&mut self, delta: Vec2) {
-        self.pos += delta;
+        let pos_old = self.pos;
+        self.pos = self.pos + delta;
+        // self.vel = self.vel + (self.pos - pos_old);
     }
 
     fn apply_acceleration(&mut self, accel: Vec2) {
-        self.accel += accel;
+        self.vel = self.vel + accel;
     }
 
     fn apply_force(&mut self, force: Vec2) {
-        self.accel += force / self.mass;
+        self.vel = self.vel + force / self.mass;
+    }
+
+    fn apply_velocity(&mut self, vel: Vec2) {
+        self.vel = self.vel + vel;
     }
 }
 
@@ -123,19 +123,20 @@ impl World {
 
     fn solve_physics(&mut self) {
         let timer = std::time::Instant::now();
+
         // get system energy
         self.system_energy = {
             let mut sum = 0.0;
             for p in self.particles.iter() {
-                sum += (p.pos - p.post_last).length();
+                sum += p.vel.length();
             }
             sum / (self.particles.len() as f32)
         };
 
         // add gravity
-        for p in self.particles.iter_mut() {
-            p.apply_acceleration(GRAVITY);
-        }
+        // for p in self.particles.iter_mut() {
+        //     p.apply_acceleration(GRAVITY * PHY_DT);
+        // }
 
         // integrate
         for p in self.particles.iter_mut() {
@@ -149,21 +150,25 @@ impl World {
             let dist_y = p.pos.y - p.radius;
             if dist_y < 0.0 {
                 p.displace(Vec2::new(0.0, -dist_y));
+                p.vel = Vec2::new(p.vel.x, -p.vel.y);
             }
 
             let dist_x = p.pos.x - p.radius;
             if dist_x < 0.0 {
                 p.displace(Vec2::new(-dist_x, 0.0));
+                p.vel = Vec2::new(p.vel.x, p.vel.y);
             }
 
             let dist_x = p.pos.x + p.radius;
             if dist_x > screen_width() {
                 p.displace(Vec2::new(screen_width() - dist_x, 0.0));
+                p.vel = Vec2::new(-p.vel.x, p.vel.y);
             }
         }
 
         // particle collisions
         let mut displacements: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
+        let mut velocities: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
 
         // particle collisions O(n^2)
         for i in 0..self.particles.len() {
@@ -171,39 +176,66 @@ impl World {
                 if i == j {
                     continue;
                 }
-                let p0 = &self.particles[i];
-                let p1 = &self.particles[j];
-                let delta = p0.pos - p1.pos;
+
+                let p1 = &self.particles[i];
+                let p2 = &self.particles[j];
+                let delta = p1.pos - p2.pos;
                 let dist = delta.length() + f32::EPSILON;
-                let diff = p0.radius + p1.radius - dist;
-                if diff > 0.0 {
-                    let normal = delta / dist;
-                    displacements[i] += normal * diff * 0.5;
-                    displacements[j] -= normal * diff * 0.5;
+                let diff = p1.radius + p2.radius - dist;
+
+                if dist == 0.0 || dist > p1.radius + p2.radius {
+                    continue;
                 }
+
+                let normal = delta / dist;
+
+                let v1 = p1.vel.dot(normal);
+                let v2 = p2.vel.dot(normal);
+                let m1 = p1.mass;
+                let m2 = p2.mass;
+
+                let m1v1m2v2 = m1 * v1 + m2 * v2;
+                let m1m2 = m1 + m2;
+
+                let m2v1v2e = m2 * (v1 - v2) * ELASTICITY;
+                let m1v2v1e = m1 * (v2 - v1) * ELASTICITY;
+
+                let v1_new = (m1v1m2v2 - m2v1v2e) / m1m2;
+                let v2_new = (m1v1m2v2 - m1v2v1e) / m1m2;
+
+                displacements[i] += normal * diff * 0.5;
+                displacements[j] -= normal * diff * 0.5;
+
+                velocities[i] += normal * (v1_new - v1) * 0.5;
+                velocities[j] += normal * (v2_new - v2) * 0.5;
             }
         }
 
         // apply displacements
         for i in 0..self.particles.len() {
             self.particles[i].displace(displacements[i]);
+            self.particles[i].apply_velocity(velocities[i]);
         }
         self.physics_time = timer.elapsed().as_secs_f32();
     }
 
     async fn solve_input(&mut self) {
         if is_key_down(KeyCode::Space) {
-            for _ in 0..1 {
+            for _ in 0..10 {
                 self.particles.push(Particle::new(
-                    self.particles.len(),
                     Vec2::new(
                         rand::gen_range(0, screen_width() as u32) as f32,
                         rand::gen_range(0, screen_height() as u32) as f32,
                     ),
                     1.0,
                     RADIUS,
+                    Vec2::new(rand::gen_range(-100.0, 100.0), rand::gen_range(-1.0, 1.0)),
                 ));
             }
+        }
+
+        if is_key_down(KeyCode::R) {
+            self.particles.clear();
         }
     }
 }
