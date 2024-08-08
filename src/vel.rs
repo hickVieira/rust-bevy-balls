@@ -18,11 +18,11 @@ pub async fn main() {
 }
 
 const RADIUS: f32 = 10.0;
-const PHY_ITERATIONS: u32 = 1;
-const PHY_DT: f32 = 0.1;
+const PHY_ITERATIONS: u32 = 4;
+const PHY_DT: f32 = 1.0 / 60.0;
 const PHY_SDT: f32 = PHY_DT / PHY_ITERATIONS as f32;
 const GRAVITY: Vec2 = Vec2::new(0.0, -9.8);
-const ELASTICITY: f32 = 0.0;
+const ELASTICITY: f32 = 0.5;
 
 struct Particle {
     pub pos: Vec2,
@@ -57,7 +57,7 @@ impl Particle {
     }
 
     fn displace(&mut self, delta: Vec2) {
-        let pos_old = self.pos;
+        // let pos_old = self.pos;
         self.pos = self.pos + delta;
         // self.vel = self.vel + (self.pos - pos_old);
     }
@@ -182,7 +182,7 @@ impl World {
                 let p1 = &self.particles[i];
                 let p2 = &self.particles[j];
                 let delta = p1.pos - p2.pos;
-                let dist = delta.length() + f32::EPSILON;
+                let dist = delta.length();
                 let diff = p1.radius + p2.radius - dist;
 
                 if diff < 0.0 {
@@ -236,7 +236,10 @@ impl World {
                     ),
                     PI * radius * radius,
                     radius,
-                    Vec2::new(rand::gen_range(-100.0, 100.0), rand::gen_range(-1.0, 1.0)),
+                    Vec2::new(
+                        rand::gen_range(-500.0, 500.0),
+                        rand::gen_range(-500.0, 500.0),
+                    ),
                 ));
             }
         }
