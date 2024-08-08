@@ -1,8 +1,11 @@
+use core::f32;
 use std::collections::HashSet;
 
 use macroquad::prelude::*;
 
 use crate::AxisChain::*;
+
+const RADIUS: f32 = 20.0;
 
 struct Particle {
     pub id: usize,
@@ -27,6 +30,13 @@ impl Particle {
 
     fn draw(&self) {
         draw_circle(self.pos.x, screen_height() - self.pos.y, self.radius, BLACK);
+        draw_text(
+            format!("{}", self.id).as_str(),
+            self.pos.x - self.radius / 2.0,
+            screen_height() - self.pos.y + self.radius / 2.0,
+            20.0,
+            GREEN,
+        );
     }
 
     fn integrate(&mut self, dt: f32) {
@@ -36,8 +46,9 @@ impl Particle {
         self.accel = Vec2::new(0.0, 0.0);
     }
 
-    fn displace(&mut self, delta: Vec2, t: f32) {
-        self.pos += delta * t;
+    fn displace(&mut self, delta: Vec2, smooth: f32) {
+        self.pos += delta;
+        self.post_last += delta * smooth;
     }
 
     fn apply_acceleration(&mut self, accel: Vec2) {
@@ -51,7 +62,9 @@ impl Particle {
 
 struct World {
     particles: Vec<Particle>,
-    dt: f32,
+    frame_time: f32,
+    physics_time: f32,
+    system_energy: f32,
 }
 
 impl World {
@@ -62,9 +75,16 @@ impl World {
             p.draw();
         }
         draw_text("IT WORKS!", 20.0, 20.0, 30.0, DARKGRAY);
-        draw_text("Press SPACE to add particles", 20.0, 60.0, 30.0, DARKGRAY);
+        draw_text("Press SPACE to add particles", 20.0, 40.0, 30.0, DARKGRAY);
         draw_text(
-            &format!("Frame time: {}ms", self.dt),
+            &format!("Frame time: {}ms", self.frame_time),
+            20.0,
+            80.0,
+            30.0,
+            DARKGRAY,
+        );
+        draw_text(
+            &format!("Physics time: {}ms", self.physics_time),
             20.0,
             100.0,
             30.0,
@@ -73,15 +93,32 @@ impl World {
         draw_text(
             &format!("Particles: {}", self.particles.len()),
             20.0,
+            120.0,
+            30.0,
+            DARKGRAY,
+        );
+        draw_text(
+            &format!("System energy: {}", self.system_energy),
+            20.0,
             140.0,
             30.0,
             DARKGRAY,
         );
         next_frame().await;
-        self.dt = timer.elapsed().as_secs_f32();
+        self.frame_time = timer.elapsed().as_secs_f32();
     }
 
     fn solve_physics(&mut self) {
+        let timer = std::time::Instant::now();
+        // get system energy
+        self.system_energy = {
+            let mut sum = 0.0;
+            for p in self.particles.iter() {
+                sum += (p.pos - p.post_last).length();
+            }
+            sum / (self.particles.len() as f32)
+        };
+
         // add gravity
         for p in self.particles.iter_mut() {
             p.apply_acceleration(Vec2::new(0.0, -9.8));
@@ -96,109 +133,150 @@ impl World {
         for p in self.particles.iter_mut() {
             let dist_y = p.pos.y - p.radius;
             if dist_y < 0.0 {
-                p.displace(Vec2::new(0.0, -dist_y), 1.0);
+                p.displace(Vec2::new(0.0, -dist_y), 0.0);
             }
 
             let dist_x = p.pos.x - p.radius;
             if dist_x < 0.0 {
-                p.displace(Vec2::new(-dist_x, 0.0), 1.0);
+                p.displace(Vec2::new(-dist_x, 0.0), 0.0);
             }
 
             let dist_x = p.pos.x + p.radius;
             if dist_x > screen_width() {
-                p.displace(Vec2::new(screen_width() - dist_x, 0.0), 1.0);
+                p.displace(Vec2::new(screen_width() - dist_x, 0.0), 0.0);
             }
         }
 
-        // build sorted lists
-        let mut x_axis = AxisChain::new(10., self.particles.len());
-        let mut y_axis = AxisChain::new(10., self.particles.len());
+        // sort axis
+        // let mut x_axis = vec![(0, 0.0); self.particles.len()];
+        // let mut y_axis = vec![(0, 0.0); self.particles.len()];
+        // for i in 0..self.particles.len() {
+        //     x_axis[i] = (i, self.particles[i].pos.x);
+        //     y_axis[i] = (i, self.particles[i].pos.y);
+        // }
+        // x_axis.sort_by(|a, b| a.1.total_cmp(&b.1));
+        // y_axis.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-        for i in 0..self.particles.len() {
-            let p = &self.particles[i];
-            x_axis.set(i, p.pos.x);
-            y_axis.set(i, p.pos.y);
-        }
-
-        x_axis.build();
-        y_axis.build();
-
-        // find intersections
-        let mut intersections: Vec<(usize, usize)> = vec![];
-        for i in 0..self.particles.len() {
-            let x_index = x_axis.get(i).0;
-            let y_index = y_axis.get(i).0;
-
-            let x_chain = x_axis.find_chain(x_index);
-            let y_chain = y_axis.find_chain(y_index);
-
-            let mut set: HashSet<usize> = HashSet::new();
-            {
-                for v in x_chain.iter() {
-                    if !set.contains(v) {
-                        set.insert(*v);
-                    }
-                }
-                for v in y_chain.iter() {
-                    if !set.contains(v) {
-                        set.insert(*v);
-                    }
-                }
-            }
-
-            // intersection
-            for v in set.iter() {
-                if x_chain.binary_search(v).is_ok() && y_chain.binary_search(v).is_ok() {
-                    intersections.push((i, *v));
-                }
-            }
-        }
-
-        // store displace values
-        let mut displacements: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
+        // let mut x_map = vec![0; self.particles.len()];
+        // let mut y_map = vec![0; self.particles.len()];
+        // for i in 0..self.particles.len() {
+        //     x_map[x_axis[i].0] = i;
+        //     y_map[y_axis[i].0] = i;
+        // }
 
         // particle collisions
-        for (i, j) in intersections.iter() {
-            let p1 = &self.particles[*i];
-            let p2 = &self.particles[*j];
-            let delta = p1.pos - p2.pos;
-            let dist = delta.length();
-            let diff = p1.radius + p2.radius - dist;
-            if diff > 0.0 {
-                let normal = delta / dist;
-                displacements[*i] += normal * diff * 0.5;
-                displacements[*j] -= normal * diff * 0.5;
-            }
-        }
-        
+        // let mut displacements: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
+
         // for i in 0..self.particles.len() {
-        //     for j in 0..self.particles.len() {
-        //         if i == j {
+        //     let p = &self.particles[i];
+        //     let index = x_map[i];
+        // }
+
+        let mut x_axis = AxisProjection::new(self.particles.len());
+        let mut y_axis = AxisProjection::new(self.particles.len());
+        for i in 0..self.particles.len() {
+            x_axis.set(i, self.particles[i].pos.x);
+            y_axis.set(i, self.particles[i].pos.y);
+        }
+        x_axis.build(RADIUS * 2.0);
+        y_axis.build(RADIUS * 2.0);
+
+        // print!("\nx : ");
+        // for i in 0..x_axis.length {
+        //     print!("{} ", x_axis.sorted[i].0);
+        // }
+        // print!("\n");
+        // for i in 0..x_axis.length {
+        //     print!("({},{}) ", x_axis.ranges[i].0, x_axis.ranges[i].1);
+        // }
+        // print!("\ny : ");
+        // for i in 0..y_axis.length {
+        //     print!("{} ", y_axis.sorted[i].0);
+        // }
+        // print!("\n");
+        // for i in 0..y_axis.length {
+        //     print!("({},{}) ", y_axis.ranges[i].0, y_axis.ranges[i].1);
+        // }
+        // print!("\n");
+
+        // particle collisions
+        let mut displacements: Vec<Vec2> = vec![Vec2::ZERO; self.particles.len()];
+        // let mut pairs: Vec<(usize, usize)> = vec![];
+
+        // for i in 0..self.particles.len() {
+        //     let proj_x_index = x_axis.src_to_proj(i);
+        //     let proj_y_index = y_axis.src_to_proj(i);
+
+        //     let x_range = x_axis.get_range(proj_x_index);
+        //     let y_range = y_axis.get_range(proj_y_index);
+
+        //     // let x_range =
+
+        //     for x in x_range.0..x_range.1 {
+        //         let src_x_index = x_axis.proj_to_src(x);
+        //         if i == src_x_index {
         //             continue;
         //         }
 
-        //         let p1 = &self.particles[i];
-        //         let p2 = &self.particles[j];
-        //         let delta = p1.pos - p2.pos;
-        //         let dist = delta.length();
-        //         let diff = p1.radius + p2.radius - dist;
-        //         if diff > 0.0 {
-        //             let normal = delta / dist;
-        //             displacements[i] += normal * diff * 0.5;
-        //             displacements[j] -= normal * diff * 0.5;
-        //         }
+        //         pairs.push((i, src_x_index));
+
+        //         // for y in y_range.0..y_range.1 {
+        //         //     let src_y_index = y_axis.proj_to_src(y);
+        //         //     if i == src_y_index {
+        //         //         continue;
+        //         //     }
+        //         //     pairs.push((i, src_y_index));
+        //         // }
         //     }
         // }
 
+        // for i in pairs.iter() {
+        //     println!("{} ({} {})", pairs.len(), i.0, i.1);
+        // }
+
+        // collide pairs
+        // for p in pairs.iter() {
+        //     let p0 = &self.particles[p.0];
+        //     let p1 = &self.particles[p.1];
+        //     let delta = p0.pos - p1.pos;
+        //     let dist = delta.length() + f32::EPSILON;
+        //     let diff = p0.radius + p1.radius - dist;
+        //     if diff > 0.0 {
+        //         let normal = delta / dist;
+        //         displacements[p.0] += normal * diff * 0.5;
+        //         displacements[p.1] -= normal * diff * 0.5;
+        //     }
+        // }
+
+        // particle collisions
+        for i in 0..self.particles.len() {
+            for j in 0..self.particles.len() {
+                if i == j {
+                    continue;
+                }
+                let p0 = &self.particles[i];
+                let p1 = &self.particles[j];
+                let delta = p0.pos - p1.pos;
+                let dist = delta.length() + f32::EPSILON;
+                let diff = p0.radius + p1.radius - dist;
+                if diff > 0.0 {
+                    let normal = delta / dist;
+                    displacements[i] += normal * diff * 0.5;
+                    displacements[j] -= normal * diff * 0.5;
+                }
+            }
+        }
+
         // apply displacements
         for i in 0..self.particles.len() {
-            self.particles[i].displace(displacements[i], 0.5);
+            self.particles[i].displace(displacements[i], 0.25);
         }
+        self.physics_time = timer.elapsed().as_secs_f32();
     }
 
     async fn solve_input(&mut self) {
         if is_key_down(KeyCode::Space) {
-            for _ in 0..100 {
+            for _ in 0..1 {
                 self.particles.push(Particle::new(
                     self.particles.len(),
                     Vec2::new(
@@ -206,7 +284,7 @@ impl World {
                         rand::gen_range(0, screen_height() as u32) as f32,
                     ),
                     1.0,
-                    10.0,
+                    RADIUS,
                 ));
             }
         }
@@ -216,7 +294,9 @@ impl World {
 pub async fn main() {
     let world = &mut World {
         particles: vec![],
-        dt: 0.0,
+        frame_time: 0.0,
+        physics_time: 0.0,
+        system_energy: 0.0,
     };
 
     loop {
