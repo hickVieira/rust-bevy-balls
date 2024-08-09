@@ -1,3 +1,5 @@
+pub mod pbd;
+
 use macroquad::prelude::*;
 
 pub async fn main() {
